@@ -24,6 +24,8 @@ void characterClose();   // close GIF + clear loaded flag; FS stays mounted   //
 // header strip; off renders full-size centered in the upper home area.
 // Adaptive to actual canvas height — no padding required in source art.
 void characterSetPeek(bool peek);
+// Paint transparent GIF pixels with this RGB565 colour (-1 = the pack's bg).
+void characterSetBgOverride(int32_t color565);
 class TFT_eSPI;
 void characterRenderTo(TFT_eSPI* tgt, int cx, int cy, bool full = false);
 

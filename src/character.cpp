@@ -42,6 +42,8 @@ static int         gifX = 0, gifY = 0, gifW = 0, gifH = 0;
 // in the upper 140px. No padding assumed in the source art.
 static const int   PEEK_TOP = 70;
 static bool        peekMode = false;
+// Colour for transparent GIF pixels while an alert screen is up (-1 = pal.bg).
+static int32_t     bgOverride = -1;
 // Draw target — defaults to the sprite; characterRenderTo() retargets to
 // M5.Lcd for the landscape clock (both inherit TFT_eSPI).
 static TFT_eSPI*   _tgt = &spr;
@@ -111,7 +113,7 @@ static void gifDrawCb(GIFDRAW* d) {
   // disposal semantics are encoder-dependent and don't compose with the
   // 2:1 peek downscale's sample alignment.
   auto put = [&](int x, int y, uint8_t idx) {
-    _tgt->drawPixel(x, y, (hasT && idx == t) ? pal.bg : pal16[idx]);
+    _tgt->drawPixel(x, y, (hasT && idx == t) ? (bgOverride >= 0 ? (uint16_t)bgOverride : pal.bg) : pal16[idx]);
   };
 
   if (peekMode) {
@@ -264,6 +266,8 @@ void characterRenderTo(TFT_eSPI* tgt, int cx, int cy, bool full) {
   }
   _tgt = prevT; peekMode = prevP; gifX = px; gifY = py;
 }
+
+void characterSetBgOverride(int32_t color565) { bgOverride = color565; }
 
 void characterSetPeek(bool peek) {
   if (peekMode == peek) return;

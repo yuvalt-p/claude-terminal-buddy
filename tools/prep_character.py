@@ -7,11 +7,13 @@ Writes to characters/<name>/ ready to drag onto the Hardware Buddy window.
 Usage:
   python3 tools/prep_character.py <character-dir-or-zip>
 """
-import json, sys, shutil, tempfile, zipfile
+import json, sys, shutil, subprocess, tempfile, zipfile
 from pathlib import Path
 from PIL import Image, ImageSequence
 
 TARGET_W = 96
+TRANSPARENT_IDX = 63   # palette slot reserved for transparent pixels
+ALPHA_CUT = 128        # alpha below this becomes transparent
 REF_W    = 1000   # normalize to this before computing the cross-state bbox
 PROJECT  = Path(__file__).resolve().parent.parent
 OUT_ROOT = PROJECT / "characters"
@@ -36,19 +38,52 @@ def _union(a, b):
 
 
 def _save_state(frames, durations, dst: Path, bbox, bg_rgb):
-    out = []
+    """Write one state GIF. Transparent source pixels stay transparent (palette
+    index TRANSPARENT_IDX) so the firmware can paint any colour behind the pet;
+    GIFs with no transparency keep the flattened-onto-bg path."""
+    flats, masks, has_t = [], [], False
     for f in frames:
         cropped = f.crop(bbox)
         w, h = cropped.size
         new_h = max(1, round(h * TARGET_W / w))
         resized = cropped.resize((TARGET_W, new_h), Image.LANCZOS)
+        alpha = resized.split()[-1]
+        mask = alpha.point(lambda a: 255 if a < ALPHA_CUT else 0)
+        has_t = has_t or mask.getbbox() is not None
         flat = Image.new("RGB", resized.size, bg_rgb)
-        flat.paste(resized, mask=resized.split()[-1])
-        out.append(flat.convert("P", palette=Image.ADAPTIVE, colors=64))
-    out[0].save(
-        dst, save_all=True, append_images=out[1:],
-        duration=durations, loop=0, optimize=False, disposal=1,
-    )
+        flat.paste(resized, mask=alpha)
+        flats.append(flat)
+        masks.append(mask)
+
+    out = []
+    for flat, mask in zip(flats, masks):
+        if has_t:
+            q = flat.quantize(colors=TRANSPARENT_IDX, method=Image.Quantize.MEDIANCUT)
+            pal = (q.getpalette() or [])[:TRANSPARENT_IDX * 3]
+            pal += [0] * ((TRANSPARENT_IDX + 1) * 3 - len(pal))
+            q.putpalette(pal)
+            q.paste(TRANSPARENT_IDX, mask=mask)
+            out.append(q)
+        else:
+            out.append(flat.convert("P", palette=Image.ADAPTIVE, colors=64))
+    opts = dict(save_all=True, append_images=out[1:], duration=durations, loop=0,
+                optimize=False, disposal=2 if has_t else 1)
+    if has_t:
+        opts["transparency"] = TRANSPARENT_IDX
+    out[0].save(dst, **opts)
+    # Pillow writes sub-rectangle delta frames; the firmware needs full frames
+    # (it doesn't composite or dispose), so expand them with gifsicle.
+    if shutil.which("gifsicle"):
+        # Two passes: gifsicle refuses to unoptimize per-frame palettes, so merge to
+        # one global palette first, then expand every frame to the full canvas.
+        t1, t2 = dst.with_suffix(".p1.gif"), dst.with_suffix(".p2.gif")
+        subprocess.run(["gifsicle", "--colors=255", str(dst), "-o", str(t1)], check=True)
+        subprocess.run(["gifsicle", "-U", "--disposal=background", str(t1), "-o", str(t2)],
+                       check=True)
+        t2.replace(dst)
+        t1.unlink()
+    else:
+        print(f"  warning: gifsicle not found, {dst.name} has delta frames (brew install gifsicle)")
     return dst.stat().st_size
 
 

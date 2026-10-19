@@ -912,65 +912,117 @@ static void drawUsage(TFT_eSPI* t, const Palette& p, int x, int y, int w) {
 }
 
 // Landscape home screen, direct to the LCD like the landscape clock (a second
-// 240x135 sprite wouldn't fit in heap). Pet on the left; status, usage and the
-// newest transcript lines in the right column, repainted only when they change.
-static void drawHomeLandscape(bool finished) {
+// 240x135 sprite wouldn't fit in heap). Pet on the left under the usage row;
+// the right column holds the status + transcript, or the approve/deny panel,
+// repainted only when it changes. alert: 1 = terminal question (solid blue),
+// 2 = turn finished (solid green); both keep the pet (attention / celebrate).
+static void drawHomeLandscape(int alert, bool prompt) {
   const Palette& p = characterPalette();
   const int RX = 122, RW = 116, LH = 8, TOP = 16, ROWS = 12, WIDTH = 19;
+  const uint16_t abg = (alert == 1) ? TFT_BLUE : TFT_GREEN;
+  const uint16_t bg  = alert ? abg : p.bg;
   M5.Lcd.setRotation(screenOrient);
-  bool repaint = paintedOrient != screenOrient;
-  if (repaint) { M5.Lcd.fillScreen(p.bg); paintedOrient = screenOrient; }
 
-  static uint16_t lastGen = 0xFFFF;
-  static uint32_t lastUsageKey = 0xFFFFFFFF;
-  static char lastMsg[24] = "";
-  static bool lastFinished = false;
-  uint32_t usageKey = (usageFresh() ? 1 : 0) | ((uint32_t)tama.usageSession << 8)
-                    | ((uint32_t)tama.usageWeek << 16);
-  if (repaint || usageKey != lastUsageKey) {
-    lastUsageKey = usageKey;
-    drawUsage(&M5.Lcd, p, 0, 4, 118);   // above the pet, left column
-  }
-  if (repaint || lastGen != tama.lineGen
-      || finished != lastFinished || strcmp(lastMsg, tama.msg) != 0) {
-    lastGen = tama.lineGen; lastFinished = finished;
-    strncpy(lastMsg, tama.msg, sizeof(lastMsg) - 1);
-    M5.Lcd.fillRect(RX, 0, RW + 2, 135, p.bg);
-    M5.Lcd.setTextSize(1);
-    M5.Lcd.setTextColor(p.text, p.bg);
-    M5.Lcd.setCursor(RX, 4);
-    M5.Lcd.printf("%.19s", tama.msg);
+  static int lastAlert = 0;
+  bool repaint = paintedOrient != screenOrient || lastAlert != alert;
+  lastAlert = alert;
+  if (repaint) { M5.Lcd.fillScreen(bg); paintedOrient = screenOrient; }
 
-    static char disp[32][24];
-    static uint8_t srcOf[32];
-    uint8_t nDisp = 0;
-    for (uint8_t i = 0; i < tama.nLines && nDisp < 32; i++) {
-      uint8_t got = wrapInto(tama.lines[i], &disp[nDisp], 32 - nDisp, WIDTH);
-      for (uint8_t j = 0; j < got; j++) srcOf[nDisp + j] = i;
-      nDisp += got;
-    }
-    int start = (nDisp > ROWS) ? nDisp - ROWS : 0;
-    for (int r = start; r < nDisp; r++) {
-      M5.Lcd.setTextColor(srcOf[r] == tama.nLines - 1 ? p.text : p.textDim, p.bg);
-      M5.Lcd.setCursor(RX, TOP + (r - start) * LH);
-      M5.Lcd.print(disp[r]);
-    }
-    if (finished) {
-      M5.Lcd.fillRect(RX, 117, RW, 16, TFT_GREEN);
-      M5.Lcd.setTextColor(TFT_BLACK, TFT_GREEN);
-      M5.Lcd.setTextSize(2);
-      M5.Lcd.setCursor(RX + 30, 119);
-      M5.Lcd.print("DONE");
+  if (alert) {
+    if (repaint) {
+      M5.Lcd.setTextColor(alert == 1 ? TFT_WHITE : TFT_BLACK, abg);
+      M5.Lcd.setTextDatum(MC_DATUM);
+      if (alert == 1) {
+        M5.Lcd.setTextSize(3);
+        M5.Lcd.drawString("INPUT", 180, 40);
+        M5.Lcd.drawString("NEEDED", 180, 70);
+        M5.Lcd.setTextSize(1);
+        M5.Lcd.drawString("check the terminal", 180, 104);
+      } else {
+        M5.Lcd.setTextSize(4);
+        M5.Lcd.drawString("DONE", 180, 67);
+      }
+      M5.Lcd.setTextDatum(TL_DATUM);
       M5.Lcd.setTextSize(1);
     }
+  } else {
+    static uint32_t lastUsageKey = 0xFFFFFFFF;
+    uint32_t usageKey = (usageFresh() ? 1 : 0) | ((uint32_t)tama.usageSession << 8)
+                      | ((uint32_t)tama.usageWeek << 16);
+    if (repaint || usageKey != lastUsageKey) {
+      lastUsageKey = usageKey;
+      drawUsage(&M5.Lcd, p, 0, 4, 118);   // above the pet, left column
+    }
+
+    static uint16_t lastGen = 0xFFFF;
+    static uint32_t lastPromptKey = 0xFFFFFFFF;
+    static char lastMsg[24] = "";
+    uint32_t waited = (millis() - promptArrivedMs) / 1000;
+    uint32_t promptKey = prompt ? (1 | (responseSent ? 2 : 0) | (waited << 2)) : 0;
+    if (repaint || lastGen != tama.lineGen || promptKey != lastPromptKey
+        || strcmp(lastMsg, tama.msg) != 0) {
+      lastGen = tama.lineGen; lastPromptKey = promptKey;
+      strncpy(lastMsg, tama.msg, sizeof(lastMsg) - 1);
+      M5.Lcd.fillRect(RX, 0, RW + 2, 135, p.bg);
+      M5.Lcd.setTextSize(1);
+      if (prompt) {
+        // Approve / deny panel, same content as the portrait one.
+        M5.Lcd.setTextColor(waited >= 10 ? HOT : p.textDim, p.bg);
+        M5.Lcd.setCursor(RX, 4);
+        M5.Lcd.printf("approve? %lus", (unsigned long)waited);
+        int toolLen = strlen(tama.promptTool);
+        M5.Lcd.setTextColor(p.text, p.bg);
+        M5.Lcd.setTextSize(toolLen <= 9 ? 2 : 1);
+        M5.Lcd.setCursor(RX, toolLen <= 9 ? 18 : 22);
+        M5.Lcd.print(tama.promptTool);
+        M5.Lcd.setTextSize(1);
+        M5.Lcd.setTextColor(p.textDim, p.bg);
+        int hlen = strlen(tama.promptHint);
+        for (int r = 0; r < 3 && r * WIDTH < hlen; r++) {
+          M5.Lcd.setCursor(RX, 44 + r * LH);
+          M5.Lcd.printf("%.19s", tama.promptHint + r * WIDTH);
+        }
+        if (responseSent) {
+          M5.Lcd.setCursor(RX, 121);
+          M5.Lcd.print("sent...");
+        } else {
+          M5.Lcd.setTextColor(GREEN, p.bg);
+          M5.Lcd.setCursor(RX, 121);
+          M5.Lcd.print("A: approve");
+          M5.Lcd.setTextColor(HOT, p.bg);
+          M5.Lcd.setCursor(RX + RW - 42, 121);
+          M5.Lcd.print("B: deny");
+        }
+      } else {
+        M5.Lcd.setTextColor(p.text, p.bg);
+        M5.Lcd.setCursor(RX, 4);
+        M5.Lcd.printf("%.19s", tama.msg);
+
+        static char disp[32][24];
+        static uint8_t srcOf[32];
+        uint8_t nDisp = 0;
+        for (uint8_t i = 0; i < tama.nLines && nDisp < 32; i++) {
+          uint8_t got = wrapInto(tama.lines[i], &disp[nDisp], 32 - nDisp, WIDTH);
+          for (uint8_t j = 0; j < got; j++) srcOf[nDisp + j] = i;
+          nDisp += got;
+        }
+        int start = (nDisp > ROWS) ? nDisp - ROWS : 0;
+        for (int r = start; r < nDisp; r++) {
+          M5.Lcd.setTextColor(srcOf[r] == tama.nLines - 1 ? p.text : p.textDim, p.bg);
+          M5.Lcd.setCursor(RX, TOP + (r - start) * LH);
+          M5.Lcd.print(disp[r]);
+        }
+      }
+    }
   }
 
-  // Pet at 5 fps, same approach as the landscape clock.
+  // Pet at 5 fps, same approach as the landscape clock. Transparent GIF pixels
+  // take the alert colour via characterSetBgOverride() while an alert is up.
   static uint32_t lastPetTick = 0;
   if (millis() - lastPetTick >= 200) {
     lastPetTick = millis();
     if (buddyMode) {
-      M5.Lcd.fillRect(0, 16, 118, 119, p.bg);
+      M5.Lcd.fillRect(0, 16, 118, 119, bg);
       buddyRenderTo(&M5.Lcd, activeState);
     } else {
       characterSetState(activeState);
@@ -1105,6 +1157,18 @@ void loop() {
   if (finished && !prevFinished) wake();
   prevQuestion = question;
   prevFinished = finished;
+
+  // Solid alert screens (no flashing): blue for a terminal question, green for a
+  // finished turn. The matching GIF (attention / celebrate) stays mounted, with
+  // its transparent pixels painted in the alert colour.
+  int alert = question ? 1 : finished ? 2 : 0;
+  static int prevAlert = 0;
+  if (alert != prevAlert) {
+    prevAlert = alert;
+    characterSetBgOverride(alert == 1 ? TFT_BLUE : alert == 2 ? TFT_GREEN : -1);
+    characterInvalidate();
+    if (buddyMode) buddyInvalidate();
+  }
 
   // LED: blink on attention (approvals and questions), pulse on finish, otherwise off
   if (activeState == P_ATTENTION && settings().led) {
@@ -1262,7 +1326,7 @@ void loop() {
   // and the info/pet pages are portrait layouts, so they pull it back.
   bool rotatable = displayMode == DISP_NORMAL
                 && !menuOpen && !settingsOpen && !resetOpen
-                && !inPrompt && !question && !blePasskey();
+                && !blePasskey();
   if (clocking || rotatable) updateOrient();
   else { screenOrient = 0; orientFrames = 0; paintedOrient = 0; }
   bool landscapeClock = clocking && screenOrient != 0;
@@ -1294,6 +1358,8 @@ void loop() {
     else if (h >= 22 || h == 0)      activeState = (now/7000 % 3 == 0) ? P_DIZZY : P_SLEEP;
     else                             activeState = (now/10000 % 5 == 0) ? P_SLEEP : P_IDLE;
   }
+  if (alert == 1)      activeState = P_ATTENTION;
+  else if (alert == 2) activeState = P_CELEBRATE;
 
   static uint32_t lastPasskey = 0;
   uint32_t pk = blePasskey();
@@ -1333,7 +1399,7 @@ void loop() {
   if (landscapeClock) {
     drawClock();
   } else if (landscapeHome) {
-    if (!napping && !screenOff) drawHomeLandscape(finished);
+    if (!napping && !screenOff) drawHomeLandscape(alert, tama.promptId[0] != 0);
   } else if (!napping && !screenOff) {
     if (blePasskey()) drawPasskey();
     else if (clocking) drawClock();
@@ -1343,25 +1409,35 @@ void loop() {
     if (resetOpen) drawReset();
     else if (settingsOpen) drawSettings();
     else if (menuOpen) drawMenu();
-    if (question) {
-      // needs your input in the terminal: solid blue, can't be missed
-      spr.fillSprite(TFT_BLUE);
-      spr.setTextColor(TFT_WHITE, TFT_BLUE);
+    if (alert) {
+      // Solid alert colour around the mounted GIF (it renders at x19-115, y22-118
+      // with transparent pixels in the alert colour); text goes underneath.
+      // No GIF pack (ASCII pet): the whole screen is the alert colour.
+      const uint16_t abg = (alert == 1) ? TFT_BLUE : TFT_GREEN;
+      const uint16_t afg = (alert == 1) ? TFT_WHITE : TFT_BLACK;
+      const int GX = 19, GY = 22, GS = 96;
+      if (characterLoaded() && !buddyMode) {
+        spr.fillRect(0, 0, W, GY, abg);
+        spr.fillRect(0, GY, GX, GS, abg);
+        spr.fillRect(GX + GS, GY, W - GX - GS, GS, abg);
+        spr.fillRect(0, GY + GS, W, H - GY - GS, abg);
+      } else {
+        spr.fillSprite(abg);
+      }
+      spr.setTextColor(afg, abg);
       spr.setTextDatum(MC_DATUM);
-      spr.setTextSize(3);
-      spr.drawString("INPUT", W / 2, H / 2 - 30);
-      spr.drawString("NEEDED", W / 2, H / 2);
+      if (alert == 1) {
+        spr.setTextSize(3);
+        spr.drawString("INPUT", W / 2, 142);
+        spr.drawString("NEEDED", W / 2, 172);
+        spr.setTextSize(1);
+        spr.drawString("check the terminal", W / 2, 206);
+      } else {
+        spr.setTextSize(4);
+        spr.drawString("DONE", W / 2, 165);
+      }
+      spr.setTextDatum(TL_DATUM);
       spr.setTextSize(1);
-      spr.drawString("check the terminal", W / 2, H / 2 + 34);
-      spr.setTextDatum(TL_DATUM);
-    } else if (finished && (now / 350) % 2 == 0) {
-      // turn finished: flash green on alternate beats so the pet stays visible
-      spr.fillSprite(TFT_GREEN);
-      spr.setTextColor(TFT_BLACK, TFT_GREEN);
-      spr.setTextDatum(MC_DATUM);
-      spr.setTextSize(4);
-      spr.drawString("DONE", W / 2, H / 2);
-      spr.setTextDatum(TL_DATUM);
     }
     spr.pushSprite(0, 0);
   }
