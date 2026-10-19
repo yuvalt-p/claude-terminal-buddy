@@ -139,7 +139,7 @@ const uint8_t MENU_N = 6;
 
 bool    settingsOpen = false;
 uint8_t settingsSel  = 0;
-const char* settingsItems[] = { "brightness", "sound", "bluetooth", "wifi", "led", "transcript", "clock rot", "ascii pet", "reset", "back" };
+const char* settingsItems[] = { "brightness", "sound", "bluetooth", "wifi", "led", "transcript", "rotation", "ascii pet", "reset", "back" };
 const uint8_t SETTINGS_N = 10;
 
 bool    resetOpen = false;
@@ -343,11 +343,11 @@ void drawMenu() {
 //   0 = portrait (sprite path, pet sleeps underneath)
 //   1 = landscape, BtnA-side down (M5.Lcd rotation 1)
 //   3 = landscape, USB-side down (M5.Lcd rotation 3)
-static uint8_t clockOrient   = 0;
+static uint8_t screenOrient   = 0;
 static int8_t  orientFrames  = 0;
 static uint8_t paintedOrient = 0;
 // RTC and IMU share an I2C bus. Reading the RTC at 60fps starves the IMU
-// reads in clockUpdateOrient — orientation detection gets noisy. Cache the
+// reads in updateOrient — orientation detection gets noisy. Cache the
 // time once per second; mood logic and drawClock both read from here.
 static RTC_TimeTypeDef _clkTm;
 static RTC_DateTypeDef _clkDt;
@@ -361,41 +361,41 @@ static void clockRefreshRtc() {
   M5.Rtc.GetDate(&_clkDt);
 }
 
-static void clockUpdateOrient() {
+static void updateOrient() {
   float ax, ay, az;
   M5.Imu.getAccelData(&ax, &ay, &az);
   uint8_t lock = settings().clockRot;
-  if (lock == 1) { clockOrient = 0; return; }
+  if (lock == 1) { screenOrient = 0; return; }
   if (lock == 2) {
     // Locked landscape: never drop to 0, but still pick 1 vs 3 from
     // gravity so the cradle works either way up. Need a strong tilt
     // for the 1↔3 swap so handling jitter doesn't flip it; otherwise
     // hold whatever we last had (or 1 from boot).
-    if (clockOrient == 0) clockOrient = (ax >= 0) ? 1 : 3;
-    if      (ax >  0.5f && clockOrient != 1) clockOrient = 1;
-    else if (ax < -0.5f && clockOrient != 3) clockOrient = 3;
+    if (screenOrient == 0) screenOrient = (ax >= 0) ? 1 : 3;
+    if      (ax >  0.5f && screenOrient != 1) screenOrient = 1;
+    else if (ax < -0.5f && screenOrient != 3) screenOrient = 3;
     return;
   }
   // Dual threshold: strict to enter (must be clearly sideways), loose to
   // stay (tolerate ~65° of tilt). With one shared threshold a slight lean
   // while sitting on the long edge puts ax right at the boundary and the
   // counter ratchets down in ~half a second.
-  bool side = (clockOrient == 0)
+  bool side = (screenOrient == 0)
     ? fabsf(ax) > 0.7f && fabsf(ay) < 0.5f && fabsf(az) < 0.5f
     : fabsf(ax) > 0.4f;
   if (side) { if (orientFrames < 20) orientFrames++; }
   else      { if (orientFrames > -10) orientFrames--; }
-  if (clockOrient == 0 && orientFrames >= 15) {
-    clockOrient = (ax > 0) ? 1 : 3;
-  } else if (clockOrient != 0 && orientFrames <= -8) {
-    clockOrient = 0;
-  } else if (clockOrient != 0 && side) {
+  if (screenOrient == 0 && orientFrames >= 15) {
+    screenOrient = (ax > 0) ? 1 : 3;
+  } else if (screenOrient != 0 && orientFrames <= -8) {
+    screenOrient = 0;
+  } else if (screenOrient != 0 && side) {
     // Direct 1↔3: a fast flip keeps |ax|>0.7 (just changes sign), so
     // `side` never drops and the exit-via-0 path can't fire. Watch for
     // ax sign disagreeing with the stored orientation.
     static int8_t swapFrames = 0;
     uint8_t want = (ax > 0) ? 1 : 3;
-    if (want != clockOrient) { if (++swapFrames >= 8) { clockOrient = want; swapFrames = 0; } }
+    if (want != screenOrient) { if (++swapFrames >= 8) { screenOrient = want; swapFrames = 0; } }
     else swapFrames = 0;
   }
 }
@@ -416,7 +416,7 @@ static void drawClock() {
   uint8_t mi = (_clkDt.Month >= 1 && _clkDt.Month <= 12) ? _clkDt.Month - 1 : 0;
   char dl[8]; snprintf(dl, sizeof(dl), "%s %02u", MON[mi], _clkDt.Date);
 
-  if (clockOrient == 0) {
+  if (screenOrient == 0) {
     paintedOrient = 0;
     // Bottom half — buddy naturally lives at y=0..82, GIF peeks at top
     // via peek mode. Clearing from 90 leaves both untouched.
@@ -432,10 +432,10 @@ static void drawClock() {
   // Landscape: 240×135 direct-to-LCD. Full fill only on entry; after that
   // text glyph bg cells repaint themselves and the pet box (small, ~90×50)
   // gets a fillRect each pet tick — small enough not to tear.
-  M5.Lcd.setRotation(clockOrient);
+  M5.Lcd.setRotation(screenOrient);
   static uint8_t lastSec = 0xFF;
-  bool repaint = paintedOrient != clockOrient;
-  if (repaint) { M5.Lcd.fillScreen(p.bg); paintedOrient = clockOrient; lastSec = 0xFF; }
+  bool repaint = paintedOrient != screenOrient;
+  if (repaint) { M5.Lcd.fillScreen(p.bg); paintedOrient = screenOrient; lastSec = 0xFF; }
 
   // Seconds tick at 1Hz; redrawing 3 strings at 60fps is 180 SPI ops/sec
   // for nothing. Gate on the second changing (or full repaint).
@@ -480,7 +480,7 @@ PersonaState derive(const TamaState& s) {
   if (!s.connected)            return P_IDLE;
   if (s.sessionsWaiting > 0)   return P_ATTENTION;
   if (s.recentlyCompleted)     return P_CELEBRATE;
-  if (s.sessionsRunning >= 3)  return P_BUSY;
+  if (s.sessionsRunning >= 1)  return P_BUSY;
   return P_IDLE;   // connected, 0+ sessions, nothing urgent — hang out
 }
 
@@ -887,22 +887,117 @@ void drawPet() {
   spr.printf("%u/%u", petPage + 1, PET_PAGES);
 }
 
+// "5h [=====     ] 42%  wk 17%" on any surface, w px wide. Hidden until a
+// usage line arrives and again once it's older than 5 minutes.
+static bool usageFresh() {
+  return tama.usageMs && millis() - tama.usageMs <= 300000;
+}
+static void drawUsage(TFT_eSPI* t, const Palette& p, int x, int y, int w) {
+  t->fillRect(x, y, w, 10, p.bg);
+  if (!usageFresh()) return;
+  uint16_t col = (tama.usageSession >= 80) ? HOT : p.body;
+  const int BX = x + 18, BW = w - 92;
+  t->setTextSize(1);
+  t->setTextColor(p.textDim, p.bg);
+  t->setCursor(x + 2, y + 1);
+  t->print("5h");
+  t->drawRect(BX, y, BW, 9, p.textDim);
+  t->fillRect(BX + 1, y + 1, (BW - 2) * tama.usageSession / 100, 7, col);
+  t->setTextColor(col, p.bg);
+  t->setCursor(BX + BW + 4, y + 1);
+  t->printf("%u%%", tama.usageSession);
+  t->setTextColor((tama.usageWeek >= 80) ? HOT : p.textDim, p.bg);
+  t->setCursor(BX + BW + 34, y + 1);
+  t->printf("wk %u%%", tama.usageWeek);
+}
+
+// Landscape home screen, direct to the LCD like the landscape clock (a second
+// 240x135 sprite wouldn't fit in heap). Pet on the left; status, usage and the
+// newest transcript lines in the right column, repainted only when they change.
+static void drawHomeLandscape(bool finished) {
+  const Palette& p = characterPalette();
+  const int RX = 122, RW = 116, LH = 8, TOP = 16, ROWS = 12, WIDTH = 19;
+  M5.Lcd.setRotation(screenOrient);
+  bool repaint = paintedOrient != screenOrient;
+  if (repaint) { M5.Lcd.fillScreen(p.bg); paintedOrient = screenOrient; }
+
+  static uint16_t lastGen = 0xFFFF;
+  static uint32_t lastUsageKey = 0xFFFFFFFF;
+  static char lastMsg[24] = "";
+  static bool lastFinished = false;
+  uint32_t usageKey = (usageFresh() ? 1 : 0) | ((uint32_t)tama.usageSession << 8)
+                    | ((uint32_t)tama.usageWeek << 16);
+  if (repaint || usageKey != lastUsageKey) {
+    lastUsageKey = usageKey;
+    drawUsage(&M5.Lcd, p, 0, 4, 118);   // above the pet, left column
+  }
+  if (repaint || lastGen != tama.lineGen
+      || finished != lastFinished || strcmp(lastMsg, tama.msg) != 0) {
+    lastGen = tama.lineGen; lastFinished = finished;
+    strncpy(lastMsg, tama.msg, sizeof(lastMsg) - 1);
+    M5.Lcd.fillRect(RX, 0, RW + 2, 135, p.bg);
+    M5.Lcd.setTextSize(1);
+    M5.Lcd.setTextColor(p.text, p.bg);
+    M5.Lcd.setCursor(RX, 4);
+    M5.Lcd.printf("%.19s", tama.msg);
+
+    static char disp[32][24];
+    static uint8_t srcOf[32];
+    uint8_t nDisp = 0;
+    for (uint8_t i = 0; i < tama.nLines && nDisp < 32; i++) {
+      uint8_t got = wrapInto(tama.lines[i], &disp[nDisp], 32 - nDisp, WIDTH);
+      for (uint8_t j = 0; j < got; j++) srcOf[nDisp + j] = i;
+      nDisp += got;
+    }
+    int start = (nDisp > ROWS) ? nDisp - ROWS : 0;
+    for (int r = start; r < nDisp; r++) {
+      M5.Lcd.setTextColor(srcOf[r] == tama.nLines - 1 ? p.text : p.textDim, p.bg);
+      M5.Lcd.setCursor(RX, TOP + (r - start) * LH);
+      M5.Lcd.print(disp[r]);
+    }
+    if (finished) {
+      M5.Lcd.fillRect(RX, 117, RW, 16, TFT_GREEN);
+      M5.Lcd.setTextColor(TFT_BLACK, TFT_GREEN);
+      M5.Lcd.setTextSize(2);
+      M5.Lcd.setCursor(RX + 30, 119);
+      M5.Lcd.print("DONE");
+      M5.Lcd.setTextSize(1);
+    }
+  }
+
+  // Pet at 5 fps, same approach as the landscape clock.
+  static uint32_t lastPetTick = 0;
+  if (millis() - lastPetTick >= 200) {
+    lastPetTick = millis();
+    if (buddyMode) {
+      M5.Lcd.fillRect(0, 16, 118, 119, p.bg);
+      buddyRenderTo(&M5.Lcd, activeState);
+    } else {
+      characterSetState(activeState);
+      characterRenderTo(&M5.Lcd, 58, 76, true);
+    }
+  }
+  M5.Lcd.setRotation(0);
+}
+
 void drawHUD() {
   if (tama.promptId[0]) { drawApproval(); return; }
   const Palette& p = characterPalette();
-  const int SHOW = 3, LH = 8, WIDTH = 21;
-  const int AREA = SHOW * LH + 4;
-  spr.fillRect(0, H - AREA, W, AREA, p.bg);
+  // Same layout as the landscape right column: status message, then the
+  // newest transcript lines, filling the space under the GIF (y 22-118).
+  const int LH = 8, WIDTH = 21, TOP = 122;
+  const int ROWS_Y = TOP + 14;
+  const int SHOW = (H - ROWS_Y) / LH;
+  drawUsage(&spr, p, 0, 4, W);   // top strip; the GIF starts at y=22
+  spr.fillRect(0, TOP, W, H - TOP, p.bg);
   spr.setTextSize(1);
 
   if (tama.lineGen != lastLineGen) { msgScroll = 0; lastLineGen = tama.lineGen; wake(); }
 
-  if (tama.nLines == 0) {
-    spr.setTextColor(p.text, p.bg);
-    spr.setCursor(4, H - LH - 2);
-    spr.print(tama.msg);
-    return;
-  }
+  spr.setTextColor(p.text, p.bg);
+  spr.setCursor(4, TOP + 2);
+  spr.printf("%.21s", tama.msg);
+  if (tama.nLines == 0) return;
 
   // Wrap all transcript lines into a flat display buffer. Track which
   // transcript index each display row came from, so we can dim older ones.
@@ -925,7 +1020,7 @@ void drawHUD() {
     uint8_t row = start + i;
     bool fresh = (srcOf[row] == newest) && (msgScroll == 0);
     spr.setTextColor(fresh ? p.text : p.textDim, p.bg);
-    spr.setCursor(4, H - AREA + 2 + i * LH);
+    spr.setCursor(4, ROWS_Y + i * LH);
     spr.print(disp[row]);
   }
   if (msgScroll > 0) {
@@ -1001,9 +1096,21 @@ void loop() {
 
   if ((int32_t)(now - oneShotUntil) >= 0) activeState = baseState;
 
-  // LED: pulse on attention, otherwise off
+  // question: a session needs input in the terminal (waiting, but no A/B prompt).
+  // finished: the bridge reported a completed turn.
+  bool question = tama.connected && tama.sessionsWaiting > 0 && !tama.promptId[0];
+  bool finished = tama.connected && tama.recentlyCompleted && !question;
+  static bool prevQuestion = false, prevFinished = false;
+  if (question && !prevQuestion) { wake(); beep(1200, 80); }
+  if (finished && !prevFinished) wake();
+  prevQuestion = question;
+  prevFinished = finished;
+
+  // LED: blink on attention (approvals and questions), pulse on finish, otherwise off
   if (activeState == P_ATTENTION && settings().led) {
     digitalWrite(LED_PIN, (now / 400) % 2 ? LOW : HIGH);
+  } else if (finished && settings().led) {
+    digitalWrite(LED_PIN, (now / 250) % 2 ? LOW : HIGH);
   } else {
     digitalWrite(LED_PIN, HIGH);
   }
@@ -1151,19 +1258,27 @@ void loop() {
                && !menuOpen && !settingsOpen && !resetOpen && !inPrompt
                && tama.sessionsRunning == 0 && tama.sessionsWaiting == 0
                && dataRtcValid() && _onUsb;
-  if (clocking) clockUpdateOrient();
-  else { clockOrient = 0; orientFrames = 0; paintedOrient = 0; }
-  bool landscapeClock = clocking && clockOrient != 0;
+  // The home screen tilts to landscape too. Approval, "INPUT NEEDED", menus
+  // and the info/pet pages are portrait layouts, so they pull it back.
+  bool rotatable = displayMode == DISP_NORMAL
+                && !menuOpen && !settingsOpen && !resetOpen
+                && !inPrompt && !question && !blePasskey();
+  if (clocking || rotatable) updateOrient();
+  else { screenOrient = 0; orientFrames = 0; paintedOrient = 0; }
+  bool landscapeClock = clocking && screenOrient != 0;
+  bool landscapeHome  = !clocking && rotatable && screenOrient != 0;
+  bool landscape      = landscapeClock || landscapeHome;
 
   static bool wasClocking = false;
   static bool wasLandscape = false;
-  if (clocking != wasClocking || landscapeClock != wasLandscape) {
+  if (clocking != wasClocking || landscape != wasLandscape) {
     if (clocking && !landscapeClock) characterSetPeek(true);
     else applyDisplayMode();
     characterInvalidate();
     if (buddyMode) buddyInvalidate();
+    paintedOrient = 0;   // landscape clock <-> landscape home: force a full repaint
     wasClocking = clocking;
-    wasLandscape = landscapeClock;
+    wasLandscape = landscape;
   }
   if (clocking) {
     uint8_t dow = clockDow();
@@ -1185,7 +1300,7 @@ void loop() {
   if (pk && !lastPasskey) { wake(); beep(1800, 60); }
   lastPasskey = pk;
 
-  if (napping || screenOff || landscapeClock) {
+  if (napping || screenOff || landscape) {
     // skip sprite render — face-down, powered off, or landscape clock
     // (which draws direct-to-LCD below)
   } else if (buddyMode) {
@@ -1217,6 +1332,8 @@ void loop() {
   }
   if (landscapeClock) {
     drawClock();
+  } else if (landscapeHome) {
+    if (!napping && !screenOff) drawHomeLandscape(finished);
   } else if (!napping && !screenOff) {
     if (blePasskey()) drawPasskey();
     else if (clocking) drawClock();
@@ -1226,6 +1343,26 @@ void loop() {
     if (resetOpen) drawReset();
     else if (settingsOpen) drawSettings();
     else if (menuOpen) drawMenu();
+    if (question) {
+      // needs your input in the terminal: solid blue, can't be missed
+      spr.fillSprite(TFT_BLUE);
+      spr.setTextColor(TFT_WHITE, TFT_BLUE);
+      spr.setTextDatum(MC_DATUM);
+      spr.setTextSize(3);
+      spr.drawString("INPUT", W / 2, H / 2 - 30);
+      spr.drawString("NEEDED", W / 2, H / 2);
+      spr.setTextSize(1);
+      spr.drawString("check the terminal", W / 2, H / 2 + 34);
+      spr.setTextDatum(TL_DATUM);
+    } else if (finished && (now / 350) % 2 == 0) {
+      // turn finished: flash green on alternate beats so the pet stays visible
+      spr.fillSprite(TFT_GREEN);
+      spr.setTextColor(TFT_BLACK, TFT_GREEN);
+      spr.setTextDatum(MC_DATUM);
+      spr.setTextSize(4);
+      spr.drawString("DONE", W / 2, H / 2);
+      spr.setTextDatum(TL_DATUM);
+    }
     spr.pushSprite(0, 0);
   }
 
@@ -1255,7 +1392,7 @@ void loop() {
   // millis() not the cached `now`: wake() runs after `now` is captured,
   // so now - lastInteractMs underflows when a button is held → flicker.
   // No auto-off on USB power — clock face wants to stay visible while charging.
-  if (!screenOff && !inPrompt && !_onUsb
+  if (!screenOff && !inPrompt && !question && !_onUsb
       && millis() - lastInteractMs > SCREEN_OFF_MS) {
     M5.Axp.SetLDO2(false);
     screenOff = true;

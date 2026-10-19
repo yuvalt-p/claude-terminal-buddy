@@ -19,6 +19,10 @@ struct TamaState {
   char     promptId[40];     // pending permission request ID; empty = no prompt
   char     promptTool[20];
   char     promptHint[44];
+  uint8_t  usageSession;     // 5h window used, 0-100 (pushed by tools/usage_bridge.py)
+  uint8_t  usageWeek;        // 7d window used, 0-100
+  uint16_t usageResetMin;    // minutes until the 5h window resets
+  uint32_t usageMs;          // millis() of last usage line; 0 = never received
 };
 
 // ---------------------------------------------------------------------------
@@ -71,6 +75,17 @@ static void _applyJson(const char* line, TamaState* out) {
   JsonDocument doc;
   if (deserializeJson(doc, line)) return;
   if (xferCommand(doc)) { _lastLiveMs = millis(); return; }
+
+  // Host-side usage line: {"usage":{"s":42,"w":17,"r":134}}. Not a heartbeat,
+  // so it must not refresh _lastLiveMs or the stick would look connected.
+  JsonObject u = doc["usage"];
+  if (!u.isNull()) {
+    out->usageSession  = constrain(u["s"] | 0, 0, 100);
+    out->usageWeek     = constrain(u["w"] | 0, 0, 100);
+    out->usageResetMin = u["r"] | 0;
+    out->usageMs       = millis() | 1;   // never 0
+    return;
+  }
 
   // Bridge sends {"time":[epoch_sec, tz_offset_sec]}; gmtime_r on the
   // adjusted epoch yields local components including weekday.

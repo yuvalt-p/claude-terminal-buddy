@@ -250,12 +250,12 @@ const Palette& characterPalette() { return pal; }
 // One-shot half-scale render to an arbitrary surface (M5.Lcd for the
 // landscape clock). Caller owns clearing. Advances frame timing so
 // animation runs even when characterTick() is bypassed.
-void characterRenderTo(TFT_eSPI* tgt, int cx, int cy) {
+void characterRenderTo(TFT_eSPI* tgt, int cx, int cy, bool full) {
   if (!gifOpen) return;   // caller opens via characterSetState(activeState)
   TFT_eSPI* prevT = _tgt; bool prevP = peekMode; int px = gifX, py = gifY;
-  _tgt = tgt; peekMode = true;
-  gifX = cx - gifW / 4;
-  gifY = cy - gifH / 4;
+  _tgt = tgt; peekMode = !full;
+  gifX = cx - gifW / (full ? 2 : 4);
+  gifY = cy - gifH / (full ? 2 : 4);
   uint32_t now = millis();
   if (now >= nextFrameAt) {
     int delayMs = 0;

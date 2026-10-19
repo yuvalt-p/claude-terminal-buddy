@@ -78,6 +78,20 @@ midnight if you want a daily counter.
 If you don't receive a snapshot for ~30 seconds, treat the connection as
 dead.
 
+## Usage line (host script, USB only)
+
+Not sent by the desktop app. `tools/usage_bridge.py` pushes the plan usage
+percentages `/status` shows, once a minute over USB serial:
+
+```json
+{"usage":{"s":42,"w":17,"r":134}}
+```
+
+`s` = 5-hour window used (%), `w` = weekly (%), `r` = minutes until the 5h
+reset. The stick draws them above the transcript and hides them after 5
+minutes without an update. A usage line is not a heartbeat and does not mark
+the stick as connected.
+
 ## Turn events
 
 Each completed turn also fires a one-shot event containing the raw SDK

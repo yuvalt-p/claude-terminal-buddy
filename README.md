@@ -170,3 +170,23 @@ tools/           — generators and converters
 The BLE API is only available when the desktop apps are in developer mode
 (**Help → Troubleshooting → Enable Developer Mode**). It's intended for
 makers and developers and isn't an officially supported product feature.
+
+## Terminal bridge (this fork)
+
+This fork talks to Claude Code in the terminal instead of the desktop app.
+
+- `bridge/` — `hook.py` is a Claude Code hook that forwards session and permission
+  events to `daemon.py`, which keeps state and writes heartbeats to the stick over
+  BLE (and USB if asked). Approve or deny permission prompts with A / B on the stick.
+  Install the daemon as a launchd agent from
+  `bridge/com.yuval.claude-buddy.plist.example` (edit the paths first), and register
+  `hook.py` for the PreToolUse / PostToolUse / PermissionRequest / Stop / UserPromptSubmit /
+  SessionStart / SessionEnd hooks in your Claude Code settings.
+- **Usage row** — the daemon polls your plan usage (the 5h and weekly percentages
+  `/status` shows, via an undocumented endpoint, using your Claude Code login from the
+  macOS Keychain) and the stick shows it above the pet. `tools/usage_bridge.py` does the
+  same over USB serial without the daemon.
+- **Landscape tilt** — the home screen rotates to landscape when the stick is on its side
+  (Settings → rotation: auto / portrait / landscape).
+- `characters/claudo/` — a Clawd GIF pack (sources in `characters/claudo-src/`). The GIFs
+  are third-party art; keep this repo private.

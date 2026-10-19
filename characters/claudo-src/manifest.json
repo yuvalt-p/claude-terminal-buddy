@@ -1,0 +1,26 @@
+{
+  "name": "claudo",
+  "colors": {
+    "body": "#D97757",
+    "bg": "#000000",
+    "text": "#FFFFFF",
+    "textDim": "#808080",
+    "ink": "#000000"
+  },
+  "states": {
+    "sleep": "claude-code-clawd-sleep.gif",
+    "idle": [
+      "claude-code-clawd-jam.gif",
+      "claude-code-jammies.gif",
+      "claude-code-parrot-hat.gif",
+      "claude-code-lightspeed-jump.gif",
+      "claude-code-clawd-build-passing.gif",
+      "claude-code-clawd-bye.gif"
+    ],
+    "busy": "claude-code-clawd-typing.gif",
+    "attention": "claude-code-clawd-hmm.gif",
+    "celebrate": "claude-code-thing-cat.gif",
+    "dizzy": "claude-code-runn.gif",
+    "heart": "claude-code-clawd-lgtm.gif"
+  }
+}
