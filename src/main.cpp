@@ -892,23 +892,40 @@ void drawPet() {
 static bool usageFresh() {
   return tama.usageMs && millis() - tama.usageMs <= 300000;
 }
+// Print s at (x,y) in the current font, clipped to maxW px with ".." if cut.
+static void printClip(TFT_eSPI* t, int x, int y, const char* s, int maxW) {
+  char buf[32];
+  strncpy(buf, s, sizeof(buf) - 1); buf[sizeof(buf) - 1] = 0;
+  int n = strlen(buf);
+  if (t->textWidth(buf) > maxW) {
+    while (n > 2 && t->textWidth(buf) + t->textWidth("..") > maxW) buf[--n] = 0;
+    strcat(buf, "..");
+  }
+  t->setCursor(x, y);
+  t->print(buf);
+}
+
+// Usage row, 16 px tall, font 2: "5h [=====   ] 42%" with the weekly figure as
+// a thin 3 px bar under the session bar (red from 80%).
 static void drawUsage(TFT_eSPI* t, const Palette& p, int x, int y, int w) {
-  t->fillRect(x, y, w, 10, p.bg);
+  t->fillRect(x, y, w, 16, p.bg);
   if (!usageFresh()) return;
   uint16_t col = (tama.usageSession >= 80) ? HOT : p.body;
-  const int BX = x + 18, BW = w - 92;
+  uint16_t wcol = (tama.usageWeek >= 80) ? HOT : p.textDim;
+  t->setTextFont(2);
   t->setTextSize(1);
+  const int BX = x + 20, BW = w - 20 - 32;
   t->setTextColor(p.textDim, p.bg);
-  t->setCursor(x + 2, y + 1);
+  t->setCursor(x + 1, y);
   t->print("5h");
-  t->drawRect(BX, y, BW, 9, p.textDim);
-  t->fillRect(BX + 1, y + 1, (BW - 2) * tama.usageSession / 100, 7, col);
+  t->drawRect(BX, y, BW, 12, p.textDim);
+  t->fillRect(BX + 1, y + 1, (BW - 2) * tama.usageSession / 100, 10, col);
+  t->drawFastHLine(BX, y + 14, BW, p.textDim);
+  t->fillRect(BX, y + 13, BW * tama.usageWeek / 100, 3, wcol);
   t->setTextColor(col, p.bg);
-  t->setCursor(BX + BW + 4, y + 1);
+  t->setCursor(BX + BW + 4, y);
   t->printf("%u%%", tama.usageSession);
-  t->setTextColor((tama.usageWeek >= 80) ? HOT : p.textDim, p.bg);
-  t->setCursor(BX + BW + 34, y + 1);
-  t->printf("wk %u%%", tama.usageWeek);
+  t->setTextFont(1);
 }
 
 // Landscape home screen, direct to the LCD like the landscape clock (a second
@@ -918,7 +935,7 @@ static void drawUsage(TFT_eSPI* t, const Palette& p, int x, int y, int w) {
 // 2 = turn finished (solid green); both keep the pet (attention / celebrate).
 static void drawHomeLandscape(int alert, bool prompt) {
   const Palette& p = characterPalette();
-  const int RX = 122, RW = 116, LH = 8, TOP = 16, ROWS = 12, WIDTH = 19;
+  const int RX = 122, RW = 116, LH = 16, TOP = 22, ROWS = 6, WIDTH = 14;
   const uint16_t abg = (alert == 1) ? TFT_BLUE : TFT_GREEN;
   const uint16_t bg  = alert ? abg : p.bg;
   M5.Lcd.setRotation(screenOrient);
@@ -951,7 +968,7 @@ static void drawHomeLandscape(int alert, bool prompt) {
                       | ((uint32_t)tama.usageWeek << 16);
     if (repaint || usageKey != lastUsageKey) {
       lastUsageKey = usageKey;
-      drawUsage(&M5.Lcd, p, 0, 4, 118);   // above the pet, left column
+      drawUsage(&M5.Lcd, p, 0, 0, 118);   // above the pet, left column
     }
 
     static uint16_t lastGen = 0xFFFF;
@@ -994,9 +1011,9 @@ static void drawHomeLandscape(int alert, bool prompt) {
           M5.Lcd.print("B: deny");
         }
       } else {
+        M5.Lcd.setTextFont(2);
         M5.Lcd.setTextColor(p.text, p.bg);
-        M5.Lcd.setCursor(RX, 4);
-        M5.Lcd.printf("%.19s", tama.msg);
+        printClip(&M5.Lcd, RX, 2, tama.msg, RW);
 
         static char disp[32][24];
         static uint8_t srcOf[32];
@@ -1008,10 +1025,10 @@ static void drawHomeLandscape(int alert, bool prompt) {
         }
         int start = (nDisp > ROWS) ? nDisp - ROWS : 0;
         for (int r = start; r < nDisp; r++) {
-          M5.Lcd.setTextColor(srcOf[r] == tama.nLines - 1 ? p.text : p.textDim, p.bg);
-          M5.Lcd.setCursor(RX, TOP + (r - start) * LH);
-          M5.Lcd.print(disp[r]);
+          M5.Lcd.setTextColor((tama.agentsRunning > 0 || srcOf[r] == tama.nLines - 1) ? p.text : p.textDim, p.bg);
+          printClip(&M5.Lcd, RX, TOP + (r - start) * LH, disp[r], RW);
         }
+        M5.Lcd.setTextFont(1);
       }
     }
   }
@@ -1037,19 +1054,19 @@ void drawHUD() {
   const Palette& p = characterPalette();
   // Same layout as the landscape right column: status message, then the
   // newest transcript lines, filling the space under the GIF (y 22-118).
-  const int LH = 8, WIDTH = 21, TOP = 122;
-  const int ROWS_Y = TOP + 14;
+  const int LH = 16, WIDTH = 16, TOP = 118;
+  const int ROWS_Y = TOP + 19;
   const int SHOW = (H - ROWS_Y) / LH;
-  drawUsage(&spr, p, 0, 4, W);   // top strip; the GIF starts at y=22
+  drawUsage(&spr, p, 2, 3, W - 4);   // top strip; the GIF starts at y=22
   spr.fillRect(0, TOP, W, H - TOP, p.bg);
   spr.setTextSize(1);
 
   if (tama.lineGen != lastLineGen) { msgScroll = 0; lastLineGen = tama.lineGen; wake(); }
 
   spr.setTextColor(p.text, p.bg);
-  spr.setCursor(4, TOP + 2);
-  spr.printf("%.21s", tama.msg);
-  if (tama.nLines == 0) return;
+  spr.setTextFont(2);
+  printClip(&spr, 4, TOP + 1, tama.msg, W - 8);
+  if (tama.nLines == 0) { spr.setTextFont(1); return; }
 
   // Wrap all transcript lines into a flat display buffer. Track which
   // transcript index each display row came from, so we can dim older ones.
@@ -1070,11 +1087,11 @@ void drawHUD() {
   uint8_t newest = tama.nLines - 1;
   for (int i = 0; start + i < end; i++) {
     uint8_t row = start + i;
-    bool fresh = (srcOf[row] == newest) && (msgScroll == 0);
+    bool fresh = tama.agentsRunning > 0 || ((srcOf[row] == newest) && (msgScroll == 0));
     spr.setTextColor(fresh ? p.text : p.textDim, p.bg);
-    spr.setCursor(4, ROWS_Y + i * LH);
-    spr.print(disp[row]);
+    printClip(&spr, 4, ROWS_Y + i * LH, disp[row], W - 8);
   }
+  spr.setTextFont(1);
   if (msgScroll > 0) {
     spr.setTextColor(p.body, p.bg);
     spr.setCursor(W - 18, H - LH - 2);

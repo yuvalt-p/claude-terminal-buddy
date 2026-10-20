@@ -16,11 +16,16 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SOCK = os.path.expanduser("~/.claude-buddy/bridge.sock")
 ASK_TIMEOUT_S = 50       # daemon gives up after this; the hook `timeout` in settings must be larger
 DEBUG = os.path.expanduser("~/.claude-buddy/hook-debug.log")
+AGENT_TOOLS = {"Agent", "Task"}                        # tools that spawn subagents
 ATTENTION_ONLY = {"AskUserQuestion", "ExitPlanMode"}   # decided in the terminal, not with A/B
 
 
 def hint_for(data):
     ti = data.get("tool_input") or {}
+    if data.get("tool_name") in AGENT_TOOLS:
+        t, d = ti.get("subagent_type"), ti.get("description")
+        if isinstance(t, str) and t:
+            return ("%s: %s" % (t, d) if isinstance(d, str) and d else t).replace("\n", " ")[:60]
     for k in ("command", "file_path", "pattern", "url", "description"):
         if isinstance(ti.get(k), str):
             return ti[k].replace("\n", " ")[:60]
@@ -87,6 +92,18 @@ def main():
         "tool": data.get("tool_name", ""),
         "hint": hint_for(data),
     }
+    for k in ("agent_id", "agent_type", "tool_use_id"):
+        if isinstance(data.get(k), str) and data[k]:
+            ev[k] = data[k]
+    if ev["tool"] in AGENT_TOOLS:
+        ti = data.get("tool_input") or {}
+        for k in ("subagent_type", "description"):
+            if isinstance(ti.get(k), str):
+                ev[k] = ti[k].replace("\n", " ")[:60]
+        ev["run_in_background"] = bool(ti.get("run_in_background"))
+        tr = data.get("tool_response")
+        if isinstance(tr, dict) and isinstance(tr.get("agentId"), str):
+            ev["response_agent_id"] = tr["agentId"]
     if ev["event"] == "PermissionRequest" and ev["tool"] in ATTENTION_ONLY:
         # A choice among options, answered in the terminal: just get the user's attention.
         ev["event"] = "Attention"

@@ -66,6 +66,7 @@ a keepalive every 10 seconds:
 | `waiting`      | Sessions blocked on a permission prompt                                           |
 | `msg`          | One-line summary suitable for a small display                                     |
 | `entries`      | Recent transcript lines, newest first (capped to a few)                           |
+| `agents`       | Optional. Count of running subagents; absent or `0` when none (see below)         |
 | `tokens`       | Cumulative output tokens since the desktop app started                            |
 | `tokens_today` | Output tokens since local midnight (persisted, survives restart)                  |
 | `prompt`       | Only present when a permission decision is needed. The `id` is what you echo back |
@@ -74,6 +75,13 @@ A few useful derived signals: `running > 0` means at least one session is
 actively generating, `waiting > 0` means a permission prompt is blocking,
 and `total == 0` means nothing is open. `tokens_today` resets at local
 midnight if you want a daily counter.
+
+While `agents > 0`, the snapshot changes shape: `msg` is `"agents running (N)"`
+and `entries` holds the running agent names instead of recent tool lines.
+Each is `"type: description"`, newest first, capped at 5, with no time prefix.
+`running` is at least 1 so the busy animation plays. Draw every row at full
+brightness; the usual dimming of older lines doesn't apply. When no agents are
+running, `agents` is absent or `0` and the snapshot looks as described above.
 
 If you don't receive a snapshot for ~30 seconds, treat the connection as
 dead.

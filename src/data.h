@@ -7,6 +7,7 @@
 struct TamaState {
   uint8_t  sessionsTotal;
   uint8_t  sessionsRunning;
+  uint8_t  agentsRunning;
   uint8_t  sessionsWaiting;
   bool     recentlyCompleted;
   uint32_t tokensToday;
@@ -108,6 +109,7 @@ static void _applyJson(const char* line, TamaState* out) {
   out->sessionsTotal     = doc["total"]     | out->sessionsTotal;
   out->sessionsRunning   = doc["running"]   | out->sessionsRunning;
   out->sessionsWaiting   = doc["waiting"]   | out->sessionsWaiting;
+  out->agentsRunning     = doc["agents"]    | 0;
   out->recentlyCompleted = doc["completed"] | false;
   uint32_t bridgeTokens = doc["tokens"] | 0;
   if (doc["tokens"].is<uint32_t>()) statsOnBridgeTokens(bridgeTokens);
@@ -191,7 +193,7 @@ inline void dataPoll(TamaState* out) {
 
   out->connected = dataConnected();
   if (!out->connected) {
-    out->sessionsTotal=0; out->sessionsRunning=0; out->sessionsWaiting=0;
+    out->sessionsTotal=0; out->sessionsRunning=0; out->sessionsWaiting=0; out->agentsRunning=0;
     out->recentlyCompleted=false; out->lastUpdated=now;
     strncpy(out->msg, "No Claude connected", sizeof(out->msg)-1);
     out->msg[sizeof(out->msg)-1]=0;

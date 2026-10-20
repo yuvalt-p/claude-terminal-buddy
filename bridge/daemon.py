@@ -19,6 +19,10 @@ KEEPALIVE_S = 3          # firmware treats >30s of silence as disconnected
 SESSION_TTL_S = 600      # forget sessions that have been silent this long
 COMPLETE_HOLD_S = 3      # how long the celebrate flag stays on after a turn ends
 FLASH_MIN_S = 8          # a finished turn flashes green only if it ran a tool or took this long
+AGENT_TTL_S = 600        # forget subagents that produced no event for this long
+MAX_AGENT_ENTRIES = 5
+PENDING_DONE_S = 30      # keep a launched Agent call's name this long for SubagentStart
+STOPPED_HOLD_S = 30      # ignore late tool events from an agent that just stopped
 LOG = os.path.expanduser("~/.claude-buddy/bridge.log")
 
 sessions = {}            # session_id -> {"running": bool, "last": float}
@@ -80,6 +84,21 @@ async def usage_poller():
         await asyncio.sleep(USAGE_POLL_S)
 
 
+def all_agents(now):
+    """Live subagents across sessions, newest first. Prunes stale ones."""
+    out = []
+    for v in sessions.values():
+        ag = v.get("agents", {})
+        for aid in [a for a, x in ag.items() if now - x["ts"] > AGENT_TTL_S]:
+            del ag[aid]
+        pa = v.get("pending_agents", [])
+        pa[:] = [p for p in pa if now - p["ts"] <= AGENT_TTL_S
+                 and now - p.get("done", now) <= PENDING_DONE_S]
+        out.extend(ag.values())
+    out.sort(key=lambda a: a["start"], reverse=True)
+    return out
+
+
 def snapshot():
     now = time.time()
     for sid in [s for s, v in sessions.items() if now - v["last"] > SESSION_TTL_S]:
@@ -94,13 +113,20 @@ def snapshot():
         "entries": entries[:5],
         "tokens_today": 0,
     }
+    agents = all_agents(now)
+    if agents:
+        snap["msg"] = "agents running (%d)" % min(len(agents), 99)
+        snap["entries"] = [a["name"] for a in agents[:MAX_AGENT_ENTRIES]]
+        snap["running"] = max(snap["running"], 1)
+        snap["total"] = max(snap["total"], 1)
+        snap["agents"] = len(agents)
     if attention and not pending:
         snap["msg"] = "look at screen"
     if pending:
         pid, p = next(iter(pending.items()))
         snap["msg"] = ("approve: " + p["tool"])[:23]
         snap["prompt"] = {"id": pid, "tool": p["tool"][:19], "hint": p["hint"][:43]}
-    if now < completed_until:
+    if now < completed_until and not agents:
         snap["completed"] = True
     return snap
 
@@ -108,6 +134,79 @@ def snapshot():
 def add_entry(text):
     entries.insert(0, time.strftime("%H:%M ") + text[:80])
     del entries[8:]
+
+
+def agent_name(typ, desc):
+    typ = typ or "agent"
+    return ("%s: %s" % (typ, desc) if desc else typ)[:60]
+
+
+def take_pending(s, typ):
+    """Pop the pending Agent tool call that best matches a subagent type, or None."""
+    pa = s.setdefault("pending_agents", [])
+    match = (next((p for p in pa if p["type"] == typ), None)
+             or next((p for p in pa if not p["type"]), None)
+             or (pa[0] if pa and not typ else None))
+    if match:
+        pa.remove(match)
+    return match
+
+
+def register_agent(s, aid, typ, now):
+    """Add a subagent, or upgrade a bare-named one once its type/description is known."""
+    ag = s.setdefault("agents", {})
+    a = ag.get(aid)
+    if a is not None and a["named"]:
+        return a
+    match = take_pending(s, typ)
+    if match:
+        name, bg, ref = agent_name(match["type"] or typ, match["desc"]), match["bg"], match["tool_use_id"]
+    else:
+        name, bg, ref = agent_name(typ, ""), False, ""
+    named = bool(match or typ)
+    if a is None:
+        a = ag[aid] = {"name": name, "ts": now, "start": now, "bg": bg, "ref": ref, "named": named}
+    elif named:
+        a.update(name=name, bg=bg, ref=ref, named=True)
+    return a
+
+
+def handle_agent_event(s, ev, name, now):
+    """Subagent lifecycle and subagent tool calls. Never touches msg/entries/prompts.
+
+    Agents are removed only by SubagentStop, SessionEnd or the TTL.
+    Returns True if the event was fully handled here.
+    """
+    aid = ev.get("agent_id")
+    typ = ev.get("agent_type") or ""
+    if name == "SubagentStart" and aid:
+        s.get("stopped", {}).pop(aid, None)
+        register_agent(s, aid, typ, now)
+    elif name == "SubagentStop" and aid:
+        s.get("agents", {}).pop(aid, None)
+        stopped = s.setdefault("stopped", {})
+        stopped[aid] = now
+        for k in [k for k, t in stopped.items() if now - t > STOPPED_HOLD_S]:
+            del stopped[k]
+    elif aid and name in ("PreToolUse", "PostToolUse", "PermissionRequest"):
+        if aid in s.get("agents", {}) or now - s.get("stopped", {}).get(aid, -1e9) > STOPPED_HOLD_S:
+            register_agent(s, aid, typ, now)["ts"] = now  # refresh; auto-registers if unseen
+    elif name in ("PreToolUse", "PostToolUse") and ev.get("tool") in ("Agent", "Task"):
+        if name == "PreToolUse":
+            s.setdefault("pending_agents", []).append({
+                "type": ev.get("subagent_type") or "", "desc": ev.get("description") or "",
+                "bg": bool(ev.get("run_in_background")), "tool_use_id": ev.get("tool_use_id") or "",
+                "ts": now})
+        else:
+            # The call returns at launch, and SubagentStart may still follow, so keep the
+            # record briefly for naming; all_agents() prunes it after PENDING_DONE_S.
+            for p in s.get("pending_agents", []):
+                if p["tool_use_id"] == (ev.get("tool_use_id") or None):
+                    p["done"] = now
+        return False
+    else:
+        return False
+    return True
 
 
 def handle_event(ev):
@@ -118,6 +217,12 @@ def handle_event(ev):
     hint = ev.get("hint") or ""
     s = sessions.setdefault(sid, {"running": False, "last": 0.0})
     s["last"] = time.time()
+    if handle_agent_event(s, ev, name, s["last"]):
+        wake.set()
+        return
+    if name == "SessionEnd":
+        s.pop("agents", None)
+        s.pop("pending_agents", None)
     # Any of these means the tool ran or the turn moved on, so a prompt still showing
     # on the device was answered in the terminal.
     if name == "PostToolUse":
@@ -160,7 +265,8 @@ def handle_event(ev):
 def cancel_pending(sid, tool=None, why=""):
     """Drop prompts for this session that were answered somewhere other than the device."""
     for pid, p in list(pending.items()):
-        if p["sid"] == sid and (tool is None or p["tool"] == tool) and not p["fut"].done():
+        tool_ok = tool is None or p["tool"] == tool
+        if p["sid"] == sid and tool_ok and not p["fut"].done():
             log("prompt cancelled", pid, why)
             p["fut"].set_result("none")
 
@@ -176,14 +282,18 @@ async def ask_device(ev, reader):
     if not any(t.name == "ble" and t.ready for t in transports):
         log("prompt skipped: no ble link")
         return "none"
+    if ev.get("agent_id"):
+        log("prompt skipped: subagent", ev["agent_id"], ev.get("tool"))
+        return "none"
     sid = ev.get("session_id") or "default"
     cancel_pending(sid, why="superseded")
     prompt_seq += 1
     pid = "req_%d_%d" % (int(time.time()) % 100000, prompt_seq)
     fut = asyncio.get_running_loop().create_future()
     pending[pid] = {"sid": sid, "tool": ev.get("tool") or "tool",
-                    "hint": ev.get("hint") or "", "fut": fut}
-    log("prompt", pid, ev.get("tool"), ev.get("hint"))
+                    "hint": ev.get("hint") or "", "fut": fut,
+                    "agent_id": ev.get("agent_id") or ""}
+    log("prompt", pid, ev.get("tool"), ev.get("hint"), "agent_id=%s" % (ev.get("agent_id") or "-"))
     wake.set()
     gone = asyncio.ensure_future(reader.read(1))     # completes on EOF or stray data
     try:
